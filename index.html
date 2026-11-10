@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="tr" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQLite Kitaplığı - WebAssembly Veritabanı</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts: Inter & Fira Code -->
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- SQL.js (SQLite WebAssembly) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
+    
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['Fira Code', 'monospace'],
+                    },
+                    colors: {
+                        slate: {
+                            850: '#151e2e',
+                            950: '#0a0f18',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Özel Kaydırma Çubuğu Stilleri */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1e293b;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #475569;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #64748b;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col selection:bg-indigo-500 selection:text-white">
+
+    <!-- Bildirim Kutusu (Toast Notification) -->
+    <div id="toast" class="fixed bottom-5 right-5 z-50 transform transition-all duration-300 translate-y-20 opacity-0 pointer-events-none">
+        <div class="bg-indigo-600 text-white px-5 py-3 rounded-xl shadow-2xl flex items-center space-x-3 border border-indigo-400/30">
+            <i id="toast-icon" class="fa-solid fa-circle-check text-xl"></i>
+            <span id="toast-message" class="font-medium text-sm">İşlem başarılı!</span>
+        </div>
+    </div>
+
+    <!-- Üst Bilgi Çubuğu (Header) -->
+    <header class="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-30">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div class="flex items-center space-x-4">
+                <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                    <i class="fa-solid fa-database text-white text-xl"></i>
+                </div>
+                <div>
+                    <div class="flex items-center gap-2.5">
+                        <h1 class="text-xl font-bold tracking-tight text-white">SQLite Kitap Veritabanı</h1>
+                        <span id="db-status-badge" class="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-1.5">
+                            <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+                            Yükleniyor...
+                        </span>
+                    </div>
+                    <p class="text-xs text-slate-400 mt-0.5">HTML5 + WebAssembly (sql.js) ile Tarayıcı İçi Gerçek SQLite Motoru</p>
+                </div>
+            </div>
+
+            <!-- İndirme ve Dışa Aktarma Butonları -->
+            <div class="flex flex-wrap items-center gap-2.5">
+                <button onclick="downloadSQLiteDB()" class="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-medium text-xs sm:text-sm transition-all flex items-center gap-2 shadow-lg shadow-indigo-600/20 cursor-pointer">
+                    <i class="fa-solid fa-download"></i>
+                    <span>.sqlite İndir (Binary)</span>
+                </button>
+                <button onclick="downloadSQLDump()" class="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-medium text-xs sm:text-sm transition-all flex items-center gap-2 cursor-pointer">
+                    <i class="fa-solid fa-file-code"></i>
+                    <span>.sql Dökümü İndir</span>
+                </button>
+                <button onclick="resetDatabase()" class="px-3.5 py-2.5 rounded-xl bg-slate-800/60 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border border-slate-800 hover:border-rose-800/50 text-xs sm:text-sm transition-all flex items-center gap-1.5 cursor-pointer" title="Veritabanını İlk Haline Sıfırla">
+                    <i class="fa-solid fa-rotate-right"></i>
+                    <span class="hidden sm:inline">Sıfırla</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Ana İçerik Alanı -->
+    <main class="flex-grow max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+        <!-- İstatistik Kartları -->
+        <section class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div class="bg-slate-900 border border-slate-800/80 rounded-2xl p-4 sm:p-5 flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Toplam Kitap</p>
+                    <p id="stat-total-books" class="text-2xl sm:text-3xl font-bold text-white mt-1">0</p>
+                    <p class="text-[11px] text-slate-500 mt-1">SELECT COUNT(*) FROM kitaplar</p>
+                </div>
+                <div class="w-11 h-11 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
+                    <i class="fa-solid fa-book text-lg"></i>
+                </div>
+            </div>
+
+            <div class="bg-slate-900 border border-slate-800/80 rounded-2xl p-4 sm:p-5 flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Kategoriler</p>
+                    <p id="stat-categories" class="text-2xl sm:text-3xl font-bold text-emerald-400 mt-1">0</p>
+                    <p class="text-[11px] text-slate-500 mt-1">COUNT(DISTINCT kategori)</p>
+                </div>
+                <div class="w-11 h-11 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+                    <i class="fa-solid fa-layer-group text-lg"></i>
+                </div>
+            </div>
+
+            <div class="bg-slate-900 border border-slate-800/80 rounded-2xl p-4 sm:p-5 flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Toplam Sayfa</p>
+                    <p id="stat-total-pages" class="text-2xl sm:text-3xl font-bold text-amber-400 mt-1">0</p>
+                    <p class="text-[11px] text-slate-500 mt-1">SUM(sayfa_sayisi)</p>
+                </div>
+                <div class="w-11 h-11 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+                    <i class="fa-solid fa-file-lines text-lg"></i>
+                </div>
+            </div>
+
+            <div class="bg-slate-900 border border-slate-800/80 rounded-2xl p-4 sm:p-5 flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Ortalama Sayfa</p>
+                    <p id="stat-avg-pages" class="text-2xl sm:text-3xl font-bold text-purple-400 mt-1">0</p>
+                    <p class="text-[11px] text-slate-500 mt-1">ROUND(AVG(sayfa_sayisi))</p>
+                </div>
+                <div class="w-11 h-11 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400">
+                    <i class="fa-solid fa-chart-simple text-lg"></i>
+                </div>
+            </div>
+        </section>
+
+        <!-- Sekme (Tab) Menüsü -->
+        <div class="border-b border-slate-800 flex flex-wrap items-center justify-between gap-4">
+            <nav class="flex space-x-2" aria-label="Tabs">
+                <button onclick="switchTab('table')" id="tab-btn-table" class="px-4 py-2.5 text-sm font-medium rounded-t-xl border-b-2 border-indigo-500 text-indigo-400 bg-slate-900/60 flex items-center gap-2 cursor-pointer transition-all">
+                    <i class="fa-solid fa-table"></i>
+                    <span>Kitap Listesi ve Filtreleme</span>
+                </button>
+                <button onclick="switchTab('sql')" id="tab-btn-sql" class="px-4 py-2.5 text-sm font-medium rounded-t-xl border-b-2 border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-900/30 flex items-center gap-2 cursor-pointer transition-all">
+                    <i class="fa-solid fa-terminal"></i>
+                    <span>Canlı SQL Sorgu Konsolu</span>
+                </button>
+                <button onclick="switchTab('schema')" id="tab-btn-schema" class="px-4 py-2.5 text-sm font-medium rounded-t-xl border-b-2 border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-900/30 flex items-center gap-2 cursor-pointer transition-all">
+                    <i class="fa-solid fa-code"></i>
+                    <span>SQL Şeması & INSERT Kodları</span>
+                </button>
+            </nav>
+
+            <div class="text-xs text-slate-400 pb-2 hidden md:flex items-center gap-2">
+                <span>Aktif Tablo:</span>
+                <code class="px-2 py-0.5 bg-slate-800 text-indigo-300 rounded font-mono">kitaplar (50 Kayıt)</code>
+            </div>
+        </div>
+
+        <!-- SEKME 1: KİTAP LİSTESİ VE FİLTRELEME -->
+        <section id="tab-content-table" class="space-y-4">
+            <!-- Arama ve Filtre Çubuğu -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
+                <div class="relative flex-grow">
+                    <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
+                    <input type="text" id="search-input" oninput="applyFilters()" placeholder="Kitap adı, yazar veya ISBN ile SQL LIKE araması yapın..." 
+                        class="w-full pl-10 pr-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors">
+                </div>
+
+                <div class="flex flex-wrap sm:flex-nowrap gap-3">
+                    <!-- Kategori Seçimi -->
+                    <select id="category-filter" onchange="applyFilters()" class="bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer">
+                        <option value="ALL">Tüm Kategoriler</option>
+                    </select>
+
+                    <!-- Sıralama Seçimi -->
+                    <select id="sort-filter" onchange="applyFilters()" class="bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer">
+                        <option value="id ASC">ID (Artan: 1-50)</option>
+                        <option value="id DESC">ID (Azalan: 50-1)</option>
+                        <option value="baslik ASC">Kitap Adı (A-Z)</option>
+                        <option value="yazar ASC">Yazar Adı (A-Z)</option>
+                        <option value="yayin_yili DESC">Yayın Yılı (Yeniden Eskiye)</option>
+                        <option value="yayin_yili ASC">Yayın Yılı (Eskiden Yeniye)</option>
+                        <option value="sayfa_sayisi DESC">Sayfa Sayısı (Çoktan Aza)</option>
+                        <option value="sayfa_sayisi ASC">Sayfa Sayısı (Azdan Çoğa)</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Çalıştırılan SQL Sorgusu Özeti -->
+            <div class="bg-slate-900/60 border border-slate-800/80 rounded-xl px-4 py-2.5 flex items-center justify-between gap-4">
+                <div class="flex items-center gap-2.5 overflow-x-auto">
+                    <span class="text-xs font-semibold uppercase tracking-wider px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 shrink-0">Aktif SQL</span>
+                    <code id="live-sql-preview" class="text-xs font-mono text-emerald-400 whitespace-nowrap">SELECT * FROM kitaplar ORDER BY id ASC;</code>
+                </div>
+                <span id="record-count-badge" class="text-xs text-slate-400 shrink-0 font-medium">50 kayıt gösteriliyor</span>
+            </div>
+
+            <!-- Veritabanı Tablosu -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+                <div class="overflow-x-auto max-h-[600px]">
+                    <table class="w-full text-left border-collapse">
+                        <thead class="bg-slate-850 text-slate-300 text-xs uppercase font-semibold tracking-wider sticky top-0 z-10 border-b border-slate-800">
+                            <tr>
+                                <th class="py-3.5 px-4 w-14 text-center">#ID</th>
+                                <th class="py-3.5 px-4">Kitap Başlığı</th>
+                                <th class="py-3.5 px-4">Yazar</th>
+                                <th class="py-3.5 px-4">Kategori</th>
+                                <th class="py-3.5 px-4 text-center">Yayın Yılı</th>
+                                <th class="py-3.5 px-4 text-right">Sayfa</th>
+                                <th class="py-3.5 px-4 font-mono text-xs">ISBN</th>
+                            </tr>
+                        </thead>
+                        <tbody id="books-table-body" class="divide-y divide-slate-800/70 text-sm">
+                            <!-- JavaScript ile SQLite'dan okunup doldurulacak -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- SEKME 2: CANLI SQL SORGU KONSOLU -->
+        <section id="tab-content-sql" class="hidden space-y-4">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Sol: Sorgu Editörü -->
+                <div class="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col space-y-4">
+                    <div class="flex items-center justify-between">
+                        <h2 class="text-base font-semibold text-white flex items-center gap-2">
+                            <i class="fa-solid fa-terminal text-indigo-400"></i>
+                            <span>SQLite Sorgu Editörü</span>
+                        </h2>
+                        <span class="text-xs text-slate-400">Tablo adı: <code class="text-indigo-300 font-mono">kitaplar</code></span>
+                    </div>
+
+                    <textarea id="custom-sql-input" rows="5" 
+                        class="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 font-mono text-sm text-emerald-400 focus:outline-none focus:border-indigo-500 transition-colors"
+                        placeholder="SQL sorgunuzu buraya yazın...">SELECT kategori, COUNT(*) AS kitap_adedi, ROUND(AVG(sayfa_sayisi)) AS ortalama_sayfa 
+FROM kitaplar 
+GROUP BY kategori 
+ORDER BY kitap_adedi DESC;</textarea>
+
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                        <div class="text-xs text-slate-400">
+                            <i class="fa-solid fa-circle-info mr-1 text-indigo-400"></i>
+                            SELECT, INSERT, UPDATE, DELETE sorgularını test edebilirsiniz.
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button onclick="clearSQLConsole()" class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors cursor-pointer">
+                                Temizle
+                            </button>
+                            <button onclick="runCustomSQL()" class="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs sm:text-sm font-medium transition-all flex items-center gap-2 shadow-lg shadow-indigo-600/20 cursor-pointer">
+                                <i class="fa-solid fa-play"></i>
+                                <span>Sorguyu Çalıştır</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Hata Mesajı Kutusu -->
+                    <div id="sql-error-box" class="hidden bg-rose-950/50 border border-rose-800 text-rose-300 px-4 py-3 rounded-xl text-xs font-mono"></div>
+                </div>
+
+                <!-- Sağ: Hazır Örnek Sorgular -->
+                <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
+                    <h3 class="text-sm font-semibold text-white flex items-center gap-2">
+                        <i class="fa-solid fa-wand-magic-sparkles text-amber-400"></i>
+                        <span>Hazır Örnek SQL Sorguları</span>
+                    </h3>
+                    <p class="text-xs text-slate-400">Tıklayarak sorguyu editöre yükleyip anında çalıştırabilirsiniz:</p>
+                    
+                    <div class="space-y-2 pt-1">
+                        <button onclick="loadPresetQuery(0)" class="w-full text-left p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800/80 border border-slate-800/80 transition-colors group cursor-pointer">
+                            <div class="text-xs font-medium text-indigo-300 group-hover:text-indigo-200">1. Kategorilere Göre Kitap Dağılımı</div>
+                            <div class="text-[11px] font-mono text-slate-500 truncate mt-0.5">GROUP BY kategori, COUNT(*), AVG(sayfa_sayisi)</div>
+                        </button>
+
+                        <button onclick="loadPresetQuery(1)" class="w-full text-left p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800/80 border border-slate-800/80 transition-colors group cursor-pointer">
+                            <div class="text-xs font-medium text-emerald-300 group-hover:text-emerald-200">2. En Kalın 10 Kitap</div>
+                            <div class="text-[11px] font-mono text-slate-500 truncate mt-0.5">ORDER BY sayfa_sayisi DESC LIMIT 10</div>
+                        </button>
+
+                        <button onclick="loadPresetQuery(2)" class="w-full text-left p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800/80 border border-slate-800/80 transition-colors group cursor-pointer">
+                            <div class="text-xs font-medium text-amber-300 group-hover:text-amber-200">3. Bilim, Teknoloji ve Açık Bilim Eserleri</div>
+                            <div class="text-[11px] font-mono text-slate-500 truncate mt-0.5">WHERE kategori IN ('Bilim', 'Teknoloji', 'Açık Bilim')</div>
+                        </button>
+
+                        <button onclick="loadPresetQuery(3)" class="w-full text-left p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800/80 border border-slate-800/80 transition-colors group cursor-pointer">
+                            <div class="text-xs font-medium text-purple-300 group-hover:text-purple-200">4. 1950 Öncesi Klasik Eserler</div>
+                            <div class="text-[11px] font-mono text-slate-500 truncate mt-0.5">WHERE yayin_yili < 1950 ORDER BY yayin_yili ASC</div>
+                        </button>
+
+                        <button onclick="loadPresetQuery(4)" class="w-full text-left p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800/80 border border-slate-800/80 transition-colors group cursor-pointer">
+                            <div class="text-xs font-medium text-rose-300 group-hover:text-rose-200">5. Tüm Kayıtları Listele (50 Kitap)</div>
+                            <div class="text-[11px] font-mono text-slate-500 truncate mt-0.5">SELECT * FROM kitaplar ORDER BY id ASC</div>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sorgu Sonuç Tablosu -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+                <div class="px-5 py-3.5 bg-slate-850 border-b border-slate-800 flex items-center justify-between">
+                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-300">Sorgu Sonucu</span>
+                    <span id="custom-sql-result-count" class="text-xs text-indigo-400 font-mono">0 satır döndü</span>
+                </div>
+                <div class="overflow-x-auto max-h-[450px]">
+                    <table class="w-full text-left border-collapse">
+                        <thead id="custom-sql-thead" class="bg-slate-900/90 text-slate-400 text-xs uppercase font-semibold border-b border-slate-800"></thead>
+                        <tbody id="custom-sql-tbody" class="divide-y divide-slate-800/70 text-sm"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- SEKME 3: SQL ŞEMASI VE INSERT KODLARI -->
+        <section id="tab-content-schema" class="hidden space-y-4">
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                        <h2 class="text-base font-semibold text-white flex items-center gap-2">
+                            <i class="fa-solid fa-code text-indigo-400"></i>
+                            <span>Ham SQL Tablo Şeması ve 50 Kitaplık INSERT İfadeleri</span>
+                        </h2>
+                        <p class="text-xs text-slate-400 mt-0.5">Bu kodu kopyalayarak herhangi bir SQLite, MySQL veya PostgreSQL veritabanında doğrudan çalıştırabilirsiniz.</p>
+                    </div>
+                    <button onclick="copySQLSchema()" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 flex items-center gap-2 self-start sm:self-auto cursor-pointer transition-colors">
+                        <i class="fa-regular fa-copy"></i>
+                        <span>Tüm SQL Kodunu Kopyala</span>
+                    </button>
+                </div>
+
+                <pre id="raw-sql-code" class="bg-slate-950 border border-slate-800 rounded-xl p-4 text-xs font-mono text-slate-300 overflow-x-auto max-h-[550px] leading-relaxed select-all"></pre>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Alt Bilgi (Footer) -->
+    <footer class="border-t border-slate-900 bg-slate-950 py-5 mt-8">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between text-xs text-slate-500 gap-2">
+            <div>SQLite 3 (sql.js WebAssembly) • 50 Kitap Kaydı • Tamamen İstemci Taraflı Çalışır</div>
+            <div>Tablo Yapısı: <code class="text-slate-400">id, baslik, yazar, kategori, yayin_yili, sayfa_sayisi, isbn</code></div>
+        </div>
+    </footer>
+
+    <!-- Uygulama Mantığı ve SQLite Veritabanı Kurulumu -->
+    <script>
+        let db = null;
+        let SQL = null;
+
+        // 50 Adet Seçkin Kitap Kaydı (Türk ve Dünya Klasikleri, Bilim, Bilgi Bilim, Açık Bilim, Felsefe, Teknoloji, Tarih)
+        const B00K_DATA = [
+            [1, "Kürk Mantolu Madonna", "Sabahattin Ali", "Türk Edebiyatı", 1943, 160, "9789753638029"],
+            [2, "Saatleri Ayarlama Enstitüsü", "Ahmet Hamdi Tanpınar", "Türk Edebiyatı", 1961, 382, "9789759955762"],
+            [3, "Tutunamayanlar", "Oğuz Atay", "Türk Edebiyatı", 1972, 724, "9789754700114"],
+            [4, "İnce Memed 1", "Yaşar Kemal", "Türk Edebiyatı", 1955, 436, "9789750807145"],
+            [5, "Çalıkuşu", "Reşat Nuri Güntekin", "Türk Edebiyatı", 1922, 544, "9789751026040"],
+            [6, "Huzur", "Ahmet Hamdi Tanpınar", "Türk Edebiyatı", 1949, 421, "9789759955779"],
+            [7, "Kara Kitap", "Orhan Pamuk", "Türk Edebiyatı", 1990, 444, "9789750826115"],
+            [8, "Aylak Adam", "Yusuf Atılgan", "Türk Edebiyatı", 1959, 192, "9789750835681"],
+            [9, "Puslu Kıtalar Atlası", "İhsan Oktay Anar", "Türk Edebiyatı", 1995, 238, "9789754704723"],
+            [10, "Yaban", "Yakup Kadri Karaosmanoğlu", "Türk Edebiyatı", 1932, 215, "9789754700657"],
+            [11, "Suç ve Ceza", "Fyodor Dostoyevski", "Dünya Edebiyatı", 1866, 687, "9789754589023"],
+            [12, "Sefiller", "Victor Hugo", "Dünya Edebiyatı", 1862, 1724, "9789754587111"],
+            [13, "1984", "George Orwell", "Bilim Kurgu", 1949, 352, "9789750718533"],
+            [14, "Cesur Yeni Dünya", "Aldous Huxley", "Bilim Kurgu", 1932, 272, "9789756902165"],
+            [15, "Dönüşüm", "Franz Kafka", "Dünya Edebiyatı", 1915, 74, "9789750719356"],
+            [16, "Yüzyıllık Yalnızlık", "Gabriel García Márquez", "Dünya Edebiyatı", 1967, 464, "9789750719363"],
+            [17, "Yabancı", "Albert Camus", "Felsefe", 1942, 112, "9789750721397"],
+            [18, "Bülbülü Öldürmek", "Harper Lee", "Dünya Edebiyatı", 1960, 355, "9789755705859"],
+            [19, "Savaş ve Barış", "Lev Tolstoy", "Dünya Edebiyatı", 1869, 1225, "9789754587159"],
+            [20, "Don Kişot", "Miguel de Cervantes", "Dünya Edebiyatı", 1605, 888, "9789750802300"],
+            [21, "Kozmos: Evrenin ve Yaşamın Sırları", "Carl Sagan", "Bilim", 1980, 384, "9789752107830"],
+            [22, "Zamanın Kısa Tarihi", "Stephen Hawking", "Bilim", 1988, 256, "9786051118192"],
+            [23, "Türlerin Kökeni", "Charles Darwin", "Bilim", 1859, 528, "9786055381769"],
+            [24, "Gen Bencildir", "Richard Dawkins", "Bilim", 1976, 520, "9786054729005"],
+            [25, "Bilimsel Devrimlerin Yapısı", "Thomas S. Kuhn", "Bilim Felsefesi", 1962, 286, "9789753631969"],
+            [26, "Bilimsel Araştırma Mantığı", "Karl Popper", "Bilim Felsefesi", 1934, 624, "9789750806445"],
+            [27, "Enformasyon: Bir Tarih, Bir Kuram, Bir Tufan", "James Gleick", "Bilgi Bilim", 2011, 560, "9786055029166"],
+            [28, "Açık Erişim (Open Access)", "Peter Suber", "Açık Bilim", 2012, 242, "9780262517638"],
+            [29, "Ağ Toplumunun Yükselişi", "Manuel Castells", "Bilgi Bilim", 1996, 712, "9789756115053"],
+            [30, "Gutenberg Galaksisi", "Marshall McLuhan", "Bilgi Bilim", 1962, 424, "9789750802720"],
+            [31, "Bilgi Yönetimi ve Kurumsal Hafıza", "Ikujiro Nonaka", "Bilgi Bilim", 1995, 304, "9780195092691"],
+            [32, "Açık Bilim ve Araştırma Verilerinin Yönetimi", "Christine L. Borgman", "Açık Bilim", 2015, 352, "9780262028561"],
+            [33, "Bilginin Arkeolojisi", "Michel Foucault", "Felsefe", 1969, 272, "9789755392349"],
+            [34, "Devlet", "Platon", "Felsefe", -375, 392, "9789754587173"],
+            [35, "Sofie'nin Dünyası", "Jostein Gaarder", "Felsefe", 1991, 592, "9789755107158"],
+            [36, "Böyle Buyurdu Zerdüşt", "Friedrich Nietzsche", "Felsefe", 1883, 350, "9789754587562"],
+            [37, "Dune", "Frank Herbert", "Bilim Kurgu", 1965, 712, "9786053754794"],
+            [38, "Vakıf", "Isaac Asimov", "Bilim Kurgu", 1951, 256, "9786053757054"],
+            [39, "Mülksüzler", "Ursula K. Le Guin", "Bilim Kurgu", 1974, 344, "9789753420228"],
+            [40, "Fahrenheit 451", "Ray Bradbury", "Bilim Kurgu", 1953, 208, "9786053757818"],
+            [41, "Sapiens: İnsan Türünün Kısa Bir Tarihi", "Yuval Noah Harari", "Tarih", 2011, 412, "9786054729074"],
+            [42, "Tüfek, Mikrop ve Çelik", "Jared Diamond", "Tarih", 1997, 662, "9789754032710"],
+            [43, "Nutuk", "Mustafa Kemal Atatürk", "Tarih", 1927, 658, "9789751020062"],
+            [44, "Osmanlı İmparatorluğu Klasik Çağ (1300-1600)", "Halil İnalcık", "Tarih", 1973, 308, "9789750805882"],
+            [45, "Algoritmalar: Hayatımızı Yöneten Bilgisayar Bilimi", "Brian Christian", "Teknoloji", 2016, 368, "9786052993651"],
+            [46, "Temiz Kod (Clean Code)", "Robert C. Martin", "Teknoloji", 2008, 464, "9780132350884"],
+            [47, "Yapay Zeka: Modern Bir Yaklaşım", "Stuart Russell & Peter Norvig", "Teknoloji", 1995, 1152, "9780134610993"],
+            [48, "Veritabanı Sistemleri ve SQL İlkeleri", "Ramez Elmasri", "Teknoloji", 2015, 1272, "9780133970777"],
+            [49, "Siber네tik: Canlıda ve Makinede Kontrol ve İletişim", "Norbert Wiener", "Teknoloji", 1948, 212, "9780262730099"],
+            [50, "Gödel, Escher, Bach: Bir Ebedi Gökçe Belik", "Douglas Hofstadter", "Bilim", 1979, 824, "9789758240395"]
+        ];
+
+        // Hazır SQL Sorgu Şablonları
+        const PRESET_QUERIES = [
+            `SELECT kategori, COUNT(*) AS kitap_adedi, SUM(sayfa_sayisi) AS toplam_sayfa, ROUND(AVG(sayfa_sayisi)) AS ortalama_sayfa \nFROM kitaplar \nGROUP BY kategori \nORDER BY kitap_adedi DESC;`,
+            `SELECT id, baslik, yazar, kategori, sayfa_sayisi \nFROM kitaplar \nORDER BY sayfa_sayisi DESC \nLIMIT 10;`,
+            `SELECT id, baslik, yazar, kategori, yayin_yili \nFROM kitaplar \nWHERE kategori IN ('Bilim', 'Bilgi Bilim', 'Açık Bilim', 'Teknoloji') \nORDER BY yayin_yili DESC;`,
+            `SELECT id, baslik, yazar, yayin_yili, sayfa_sayisi \nFROM kitaplar \nWHERE yayin_yili < 1950 \nORDER BY yayin_yili ASC;`,
+            `SELECT * FROM kitaplar ORDER BY id ASC;`
+        ];
+
+        // SQL Şema ve INSERT Kodlarını Metin Olarak Üretme Fonksiyonu
+        function generateFullSQLScript() {
+            let sql = `-- =========================================================\n`;
+            sql += `-- SQLite Kitap Veritabanı Şeması ve 50 Kitaplık Veri Dökümü\n`;
+            sql += `-- =========================================================\n\n`;
+            sql += `DROP TABLE IF EXISTS kitaplar;\n\n`;
+            sql += `CREATE TABLE kitaplar (\n`;
+            sql += `    id INTEGER PRIMARY KEY,\n`;
+            sql += `    baslik TEXT NOT NULL,\n`;
+            sql += `    yazar TEXT NOT NULL,\n`;
+            sql += `    kategori TEXT NOT NULL,\n`;
+            sql += `    yayin_yili INTEGER,\n`;
+            sql += `    sayfa_sayisi INTEGER,\n`;
+            sql += `    isbn TEXT\n`;
+            sql += `);\n\n`;
+            sql += `-- 50 Kitap Kaydının Eklenmesi\n`;
+            sql += `BEGIN TRANSACTION;\n`;
+
+            B00K_DATA.forEach(b => {
+                const escapedTitle = b[1].replace(/'/g, "''");
+                const escapedAuthor = b[2].replace(/'/g, "''");
+                const escapedCat = b[3].replace(/'/g, "''");
+                sql += `INSERT INTO kitaplar (id, baslik, yazar, kategori, yayin_yili, sayfa_sayisi, isbn) VALUES (${b[0]}, '${escapedTitle}', '${escapedAuthor}', '${escapedCat}', ${b[4]}, ${b[5]}, '${b[6]}');\n`;
+            });
+
+            sql += `COMMIT;\n`;
+            return sql;
+        }
+
+        // Sayfa Yüklendiğinde SQL.js Motorunu Başlat
+        window.addEventListener('DOMContentLoaded', async () => {
+            try {
+                SQL = await initSqlJs({
+                    locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}`
+                });
+                initDatabase();
+            } catch (err) {
+                console.error("SQLite başlatma hatası:", err);
+                const badge = document.getElementById('db-status-badge');
+                badge.className = "px-2.5 py-0.5 text-xs font-semibold rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20";
+                badge.innerHTML = `<i class="fa-solid fa-triangle-exclamation mr-1"></i> Hata Oluştu`;
+            }
+        });
+
+        // Veritabanını Oluştur ve 50 Kaydı Yükle
+        function initDatabase() {
+            if (db) {
+                db.close();
+            }
+            db = new SQL.Database();
+            const fullSQL = generateFullSQLScript();
+            db.run(fullSQL);
+
+            // Durum Rozetini Güncelle
+            const badge = document.getElementById('db-status-badge');
+            badge.className = "px-2.5 py-0.5 text-xs font-semibold rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1.5";
+            badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400"></span> SQLite Hazır (50 Kayıt)`;
+
+            // Ham SQL Görüntüleyicisini Doldur
+            document.getElementById('raw-sql-code').textContent = fullSQL;
+
+            // Arayüz Bileşenlerini Güncelle
+            updateStats();
+            populateCategoryDropdown();
+            applyFilters();
+            runCustomSQL();
+        }
+
+        // Veritabanını Sıfırla
+        function resetDatabase() {
+            initDatabase();
+            showToast("Veritabanı 50 orijinal kitap kaydıyla sıfırlandı!");
+        }
+
+        // Üstteki 4 İstatistik Kartını SQL Sorgularıyla Güncelle
+        function updateStats() {
+            const res = db.exec(`
+                SELECT 
+                    COUNT(*) as total,
+                    COUNT(DISTINCT kategori) as categories,
+                    SUM(sayfa_sayisi) as total_pages,
+                    ROUND(AVG(sayfa_sayisi)) as avg_pages
+                FROM kitaplar;
+            `);
+
+            if (res.length > 0) {
+                const row = res[0].values[0];
+                document.getElementById('stat-total-books').textContent = row[0] || 0;
+                document.getElementById('stat-categories').textContent = row[1] || 0;
+                document.getElementById('stat-total-pages').textContent = (row[2] || 0).toLocaleString('tr-TR');
+                document.getElementById('stat-avg-pages').textContent = row[3] || 0;
+            }
+        }
+
+        // Kategori Açılır Menüsünü SQLite'dan Gelen DISTINCT Kategorilerle Doldur
+        function populateCategoryDropdown() {
+            const select = document.getElementById('category-filter');
+            select.innerHTML = `<option value="ALL">Tüm Kategoriler</option>`;
+            
+            const res = db.exec(`SELECT kategori, COUNT(*) as adet FROM kitaplar GROUP BY kategori ORDER BY kategori ASC;`);
+            if (res.length > 0) {
+                res[0].values.forEach(row => {
+                    const opt = document.createElement('option');
+                    opt.value = row[0];
+                    opt.textContent = `${row[0]} (${row[1]})`;
+                    select.appendChild(opt);
+                });
+            }
+        }
+
+        // Kategoriye Göre Renkli Etiket (Badge) Döndür
+        function getCategoryBadge(cat) {
+            const colorMap = {
+                "Türk Edebiyatı": "bg-rose-500/10 text-rose-400 border-rose-500/20",
+                "Dünya Edebiyatı": "bg-indigo-500/10 text-indigo-400 border-indigo-500/20",
+                "Bilim": "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+                "Bilim Felsefesi": "bg-teal-500/10 text-teal-400 border-teal-500/20",
+                "Bilgi Bilim": "bg-cyan-500/10 text-cyan-400 border-cyan-500/20",
+                "Açık Bilim": "bg-sky-500/10 text-sky-400 border-sky-500/20",
+                "Felsefe": "bg-purple-500/10 text-purple-400 border-purple-500/20",
+                "Bilim Kurgu": "bg-fuchsia-500/10 text-fuchsia-400 border-fuchsia-500/20",
+                "Tarih": "bg-amber-500/10 text-amber-400 border-amber-500/20",
+                "Teknoloji": "bg-blue-500/10 text-blue-400 border-blue-500/20"
+            };
+            const classes = colorMap[cat] || "bg-slate-800 text-slate-300 border-slate-700";
+            return `<span class="px-2.5 py-1 text-xs font-medium rounded-lg border ${classes} inline-block whitespace-nowrap">${cat}</span>`;
+        }
+
+        // Arama ve Kategori Filtrelerini SQL Sorgusuna Dönüştürerek Çalıştır
+        function applyFilters() {
+            const search = document.getElementById('search-input').value.trim();
+            const category = document.getElementById('category-filter').value;
+            const sort = document.getElementById('sort-filter').value;
+
+            let conditions = [];
+            let params = [];
+
+            if (category !== 'ALL') {
+                conditions.push(`kategori = ?`);
+                params.push(category);
+            }
+
+            if (search.length > 0) {
+                conditions.push(`(baslik LIKE ? OR yazar LIKE ? OR isbn LIKE ?)`);
+                params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+            }
+
+            const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+            const query = `SELECT * FROM kitaplar ${whereClause} ORDER BY ${sort};`;
+
+            // Kullanıcıya çalışan gerçek SQL sorgusunu göster
+            let displaySQL = query;
+            params.forEach(p => {
+                displaySQL = displaySQL.replace('?', `'${p}'`);
+            });
+            document.getElementById('live-sql-preview').textContent = displaySQL;
+
+            // Parametreli SQLite Sorgusunu Hazırla ve Çalıştır
+            const stmt = db.prepare(query);
+            stmt.bind(params);
+
+            const tbody = document.getElementById('books-table-body');
+            tbody.innerHTML = '';
+
+            let count = 0;
+            while (stmt.step()) {
+                count++;
+                const row = stmt.getAsObject();
+                const yilText = row.yayin_yili < 0 ? `M.Ö. ${Math.abs(row.yayin_yili)}` : row.yayin_yili;
+
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-slate-800/40 transition-colors";
+                tr.innerHTML = `
+                    <td class="py-3 px-4 font-mono text-xs text-slate-400 text-center">#${row.id}</td>
+                    <td class="py-3 px-4 font-medium text-white">${row.baslik}</td>
+                    <td class="py-3 px-4 text-slate-300">${row.yazar}</td>
+                    <td class="py-3 px-4">${getCategoryBadge(row.kategori)}</td>
+                    <td class="py-3 px-4 text-center text-slate-300 font-mono text-xs">${yilText}</td>
+                    <td class="py-3 px-4 text-right font-mono text-xs text-slate-300">${row.sayfa_sayisi} s.</td>
+                    <td class="py-3 px-4 font-mono text-xs text-slate-500">${row.isbn}</td>
+                `;
+                tbody.appendChild(tr);
+            }
+            stmt.free();
+
+            if (count === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="7" class="py-12 text-center text-slate-500">
+                            <i class="fa-solid fa-magnifying-glass text-2xl mb-2 block text-slate-600"></i>
+                            Arama kriterlerinize uygun kitap kaydı bulunamadı.
+                        </td>
+                    </tr>
+                `;
+            }
+
+            document.getElementById('record-count-badge').textContent = `${count} kayıt gösteriliyor`;
+        }
+
+        // Canlı SQL Konsolundaki Sorguyu Çalıştır
+        function runCustomSQL() {
+            const sqlText = document.getElementById('custom-sql-input').value.trim();
+            const errorBox = document.getElementById('sql-error-box');
+            const thead = document.getElementById('custom-sql-thead');
+            const tbody = document.getElementById('custom-sql-tbody');
+            const countBadge = document.getElementById('custom-sql-result-count');
+
+            errorBox.classList.add('hidden');
+            thead.innerHTML = '';
+            tbody.innerHTML = '';
+
+            if (!sqlText) return;
+
+            try {
+                const results = db.exec(sqlText);
+                
+                // Eğer INSERT/UPDATE/DELETE çalıştırıldıysa ana tabloyu ve istatistikleri de güncelle
+                updateStats();
+                populateCategoryDropdown();
+                applyFilters();
+
+                if (results.length === 0) {
+                    countBadge.textContent = "Sorgu başarıyla çalıştı (Sonuç tablosu döndürmedi)";
+                    tbody.innerHTML = `<tr><td class="p-6 text-center text-slate-400 text-xs">Sorgu başarıyla yürütüldü.</td></tr>`;
+                    return;
+                }
+
+                const columns = results[0].columns;
+                const values = results[0].values;
+
+                countBadge.textContent = `${values.length} satır döndü`;
+
+                // Başlıkları Oluştur
+                const headerRow = document.createElement('tr');
+                columns.forEach(col => {
+                    const th = document.createElement('th');
+                    th.className = "py-3 px-4 text-left font-mono text-xs text-indigo-300";
+                    th.textContent = col;
+                    headerRow.appendChild(th);
+                });
+                thead.appendChild(headerRow);
+
+                // Satırları Oluştur
+                values.forEach(row => {
+                    const tr = document.createElement('tr');
+                    tr.className = "hover:bg-slate-800/40 transition-colors";
+                    row.forEach(val => {
+                        const td = document.createElement('td');
+                        td.className = "py-2.5 px-4 text-slate-200 font-mono text-xs";
+                        td.textContent = val !== null ? val : 'NULL';
+                        tr.appendChild(td);
+                    });
+                    tbody.appendChild(tr);
+                });
+
+            } catch (err) {
+                errorBox.textContent = `SQL Hatası: ${err.message}`;
+                errorBox.classList.remove('hidden');
+                countBadge.textContent = "Hata oluştu";
+            }
+        }
+
+        // Hazır Sorgu Yükle
+        function loadPresetQuery(index) {
+            document.getElementById('custom-sql-input').value = PRESET_QUERIES[index];
+            runCustomSQL();
+        }
+
+        // Konsolu Temizle
+        function clearSQLConsole() {
+            document.getElementById('custom-sql-input').value = '';
+            document.getElementById('custom-sql-Input')?.focus();
+        }
+
+        // Sekmeler Arası Geçiş
+        function switchTab(tabName) {
+            const tabs = ['table', 'sql', 'schema'];
+            tabs.forEach(t => {
+                const content = document.getElementById(`tab-content-${t}`);
+                const btn = document.getElementById(`tab-btn-${t}`);
+                if (t === tabName) {
+                    content.classList.remove('hidden');
+                    btn.className = "px-4 py-2.5 text-sm font-medium rounded-t-xl border-b-2 border-indigo-500 text-indigo-400 bg-slate-900/60 flex items-center gap-2 cursor-pointer transition-all";
+                } else {
+                    content.classList.add('hidden');
+                    btn.className = "px-4 py-2.5 text-sm font-medium rounded-t-xl border-b-2 border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-900/30 flex items-center gap-2 cursor-pointer transition-all";
+                }
+            });
+        }
+
+        // Gerçek .sqlite Binary Dosyasını Bilgisayara İndir
+        function downloadSQLiteDB() {
+            if (!db) return;
+            const binaryArray = db.export();
+            const blob = new Blob([binaryArray], { type: "application/x-sqlite3" });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = "kitaplar_veritabani_50_kayit.sqlite";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            showToast("kitaplar_veritabani_50_kayit.sqlite başarıyla indirildi!");
+        }
+
+        // .sql Metin Dökümünü Bilgisayara İndir
+        function downloadSQLDump() {
+            const sqlText = generateFullSQLScript();
+            const blob = new Blob([sqlText], { type: "text/plain;charset=utf-8" });
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = "kitaplar_50_kayit_dump.sql";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            showToast("kitaplar_50_kayit_dump.sql dosyası indirildi!");
+        }
+
+        // SQL Şemasını Panoya Kopyala
+        function copySQLSchema() {
+            const sqlText = document.getElementById('raw-sql-code').textContent;
+            const tempInput = document.createElement('textarea');
+            tempInput.value = sqlText;
+            document.body.appendChild(tempInput);
+            tempInput.select();
+            document.execCommand('copy');
+            document.body.removeChild(tempInput);
+
+            showToast("SQL tablo şeması ve 50 INSERT kaydı panoya kopyalandı!");
+        }
+
+        // Bildirim (Toast) Gösterimi
+        let toastTimeout;
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            document.getElementById('toast-message').textContent = message;
+            toast.classList.remove('translate-y-20', 'opacity-0');
+            
+            clearTimeout(toastTimeout);
+            toastTimeout = setTimeout(() => {
+                toast.classList.add('translate-y-20', 'opacity-0');
+            }, 3200);
+        }
+    </script>
+</body>
+</html>
